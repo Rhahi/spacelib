@@ -3,7 +3,7 @@ import asyncio
 from typing import Coroutine
 from missionlib.commons import Spacecraft
 from spacelib.telemetry import colorlog
-log = colorlog.getLogger(__name__)
+logger = colorlog.getLogger(__name__)
 
 
 def timer(s: Spacecraft, seconds) -> Coroutine:
@@ -20,8 +20,6 @@ def timer(s: Spacecraft, seconds) -> Coroutine:
         timer_future = asyncio.create_task(timer(s, seconds))
         do_something_else()
         await timer_future
-        
-        
         ```
 
     Args:
@@ -32,7 +30,7 @@ def timer(s: Spacecraft, seconds) -> Coroutine:
         Coroutine: coroutine to wait
     """
     t0 = s.sc.ut
-    log.debug('Timer starts with %s seconds', seconds)
+    logger.timing('Timer starts with %s seconds', seconds)
     tf = t0 + float(seconds)
     t = s.conn.get_call(getattr, s.sc, 'ut')  # in-game universal time
     expr = s.conn.krpc.Expression.greater_than(
