@@ -7,9 +7,10 @@ logger = getLogger(__name__)
 
 
 async def collect_flight_data(s: Spacecraft, *args, duration=None, file_output=None):
-    logger.trace("initializing data collection")
+    logger.trace("initializing flight data collection (FDC)")
     flight = s.ves.flight()
-    keywords = [k for k in args if k is str and hasattr(FlightProperty, k)]
+    keywords = [k for k in args if type(k) is str and hasattr(FlightProperty, k)]
+    logger.trace("number of FDC keywords: %d", len(keywords))
     time = s.conn.add_stream(getattr, s.sc, 'ut')
     call = {k: s.conn.add_stream(getattr, flight, k) for k in keywords}
     data = {k: [] for k in keywords}
@@ -17,17 +18,29 @@ async def collect_flight_data(s: Spacecraft, *args, duration=None, file_output=N
     
     last_time = 0
     start_time = time()
+    dupliate_count = 0
+    
+    def send_log_output():
+        duration = last_time - start_time
+        logger.trace("flight data collection statistics")
+        logger.trace("  duplicate count %d", dupliate_count)
+        logger.trace("  duration %f", duration)
+        if duration > 1:
+            logger.trace("  duplicates per second %f", dupliate_count / duration)
+        if file_output:
+            save_flight_data(file_output, data)
+        return data
+    
     try:
         logger.info("starting data collection")
         while True:
-            logger.trace("looping")
             t = time()
             if start_time + duration < t:
-                logger.trace("break due to timeout")
-                break  # check for timeout
+                logger.trace("flight data collection timeout")
+                break
             if not last_time < t:
-                logger.trace("Skip dupe")
-                continue  # do not parse more than once a tick
+                dupliate_count += 1
+                continue
             last_time = t
             
             try:
@@ -40,13 +53,10 @@ async def collect_flight_data(s: Spacecraft, *args, duration=None, file_output=N
             await asyncio.sleep(0)
     
     except (asyncio.CancelledError, asyncio.TimeoutError):
-        logger.trace("data collector cancelled")
-        if file_output:
-            save_flight_data(file_output, data)
-        return data
-    if file_output:
-        save_flight_data(file_output, data)
-    return data
+        logger.trace("flight data collection cancelled")
+        return send_log_output()
+    logger.trace("flight data collection finished")
+    return send_log_output()
 
 
 def save_flight_data(file, data):
