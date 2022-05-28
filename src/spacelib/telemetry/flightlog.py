@@ -20,10 +20,13 @@ async def collect_flight_data(s: Spacecraft, *args, duration=None, file_output=N
     try:
         logger.info("starting data collection")
         while True:
+            logger.trace("looping")
             t = time()
-            if start_time + duration > t:
+            if start_time + duration < t:
+                logger.trace("break due to timeout")
                 break  # check for timeout
             if not last_time < t:
+                logger.trace("Skip dupe")
                 continue  # do not parse more than once a tick
             last_time = t
             
@@ -34,8 +37,10 @@ async def collect_flight_data(s: Spacecraft, *args, duration=None, file_output=N
                 data['time'].append(t)
                 for k in keywords:
                     data[k].append(call[k]())
-            asyncio.sleep(0)
+            await asyncio.sleep(0)
+    
     except (asyncio.CancelledError, asyncio.TimeoutError):
+        logger.trace("data collector cancelled")
         if file_output:
             save_flight_data(file_output, data)
         return data

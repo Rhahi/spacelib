@@ -1,8 +1,9 @@
-"""Newton 2
+"""Newton 3
 
-Extended main engine
-Two SRB stages, no payload.
-Intended for 140 km altitude with no extra payload
+Two stages, with two SRB zeroth stage.
+170 sounding rocket payload
+Intended for 70 km altitude.
+Record atmospheric data
 
 https://ksp.rhahi.space/mission/plans/suborbital/newton
 """
@@ -10,13 +11,21 @@ https://ksp.rhahi.space/mission/plans/suborbital/newton
 import asyncio
 from enum import IntEnum
 from missionlib.commons import Spacecraft
-from spacelib.time import timer
-from spacelib.telemetry import colorlog
+from spacelib.time import timer, until
+from spacelib.telemetry import colorlog, sensors
+from spacelib.types import FlightProperty
 logging = colorlog.getLogger(__name__, colorlog.ALL)
 
 
 async def main(s: Spacecraft):
     s.ves.control.throttle = 1.0
+    collector = sensors.collect_flight_data(s,
+                                FlightProperty.atmosphere_density,
+                                FlightProperty.drag,
+                                FlightProperty.bedrock_altitude,
+                                FlightProperty.true_air_speed,
+                                file_output="data/newton3_atmo_data.csv")
+    collector_task = asyncio.create_task(collector)
     s.ves.control.toggle_action_group(ActionGroup.IGNITE_0A_RELEASE)
     await timer(s, 1.5)
     s.ves.control.toggle_action_group(ActionGroup.IGNITE_0B_DECOUPLE)
@@ -28,6 +37,8 @@ async def main(s: Spacecraft):
     s.ves.control.toggle_action_group(ActionGroup.IGNITE_1B)
     await timer(s, 0.1)
     s.ves.control.toggle_action_group(ActionGroup.DECOUPLE_1A)
+    await until(s, 50e+3, flight=FlightProperty.bedrock_altitude)
+    collector_task.cancel()
 
 class ActionGroup(IntEnum):
     # Stage 0
@@ -42,7 +53,7 @@ class ActionGroup(IntEnum):
     
 
 if __name__ == "__main__":
-    spacecraft = Spacecraft("Newton 2")
+    spacecraft = Spacecraft("Newton 3")
     try:
         asyncio.run(main(spacecraft))
         logging.system("End of instructions reached")
