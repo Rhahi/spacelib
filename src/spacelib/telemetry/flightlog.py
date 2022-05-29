@@ -31,7 +31,7 @@ class FlightDataCollector():
         self.running = True
         self.call = {k: s.conn.add_stream(getattr, flight, k) for k in self.keywords}
         
-        logger.info("initializing calls")
+        logger.trace("initializing calls")
         for k in self.keywords:
             self.call[k]()
         
@@ -51,7 +51,7 @@ class FlightDataCollector():
     def stop(self):
         if self.running:
             duration = self.last_time - self.start_time
-            logger.trace("flight data collection stopped after %s seconds", duration)
+            logger.info("flight data collection stopped after %s seconds", duration)
             self.collector.remove()
             self.running = False
     
@@ -61,7 +61,7 @@ class FlightDataCollector():
         if len(self.data) > 0:
             df = pd.DataFrame.from_dict(self.data)
             df.to_csv(outfile, sep=';')
-            logger.info("data saved at %s", outfile)
+            logger.ok("data saved at %s", outfile)
         else:
             logger.warning("flight data collection data is empty, skipping save")
 
