@@ -1,6 +1,7 @@
 """Collect sensor values and store them for science."""
 import asyncio
 import pandas as pd
+import time
 from spacelib.types import Spacecraft, FlightProperty, Stream
 from spacelib.telemetry.colorlog import getLogger
 logger = getLogger(__name__)
@@ -57,11 +58,13 @@ class FlightDataCollector():
     
     
     def save(self, outfile):
-        logger.system("Starting data save, this may take some time...")
+        logger.system("Starting data save...")
         if len(self.data) > 0:
+            t0 = time.time()
             df = pd.DataFrame.from_dict(self.data)
             df.to_csv(outfile, sep=';')
-            logger.ok("data saved at %s", outfile)
+            tf = time.time()
+            logger.ok("data saved at %s. This operation took %f seconds.", outfile, tf - t0)
         else:
             logger.warning("flight data collection data is empty, skipping save")
 
@@ -99,28 +102,28 @@ async def _log_flight_data(call, now, data, keywords, end_time):
     duplicate_count = 0
     last_time = 0
     while True:
-        time = now()
-        if time > end_time:
+        t = now()
+        if t > end_time:
             logger.trace("flight data collection timeout")
             break
-        if not last_time < time:
+        if not last_time < t:
             duplicate_count += 1
             continue
-        last_time = time
+        last_time = t
         
         try:
             # use a try-finally block here to ensure that the data is complete
             pass
         finally:
-            data['time'].append(time)
+            data['time'].append(t)
             for k in keywords:
                 data[k].append(call[k]())
         await asyncio.sleep(0)
     logger.trace("flight data collection statistics")
     logger.trace("  duplicate count %d", duplicate_count)
-    logger.trace("  duration %f", end_time - time)
-    if end_time - time > 1:
-        logger.trace("  duplicates per second %f", duplicate_count / end_time - time)
+    logger.trace("  duration %f", end_time - t)
+    if end_time - t > 1:
+        logger.trace("  duplicates per second %f", duplicate_count / end_time - t)
 
 def save_flight_data(file, data):
     logger.warning("Starting data save, this may take some time...")
