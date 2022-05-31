@@ -1,136 +1,147 @@
 """Collect sensor values and store them for science."""
-import asyncio
-import pandas as pd
 import time
-from spacelib.types import Spacecraft, FlightProperty, Stream
+from typing import TextIO
+import pandas as pd
+from spacelib.types import Spacecraft, FlightProperty, Stream, VesselProperty
 from spacelib.telemetry.colorlog import getLogger
 logger = getLogger(__name__)
 
 
-class FlightDataCollector():
-    def __init__(self, s: Spacecraft, *args) -> None:
-        logger.trace("initializing flight data collection")
-        self.keywords = [k for k in args if isinstance(k, str) and hasattr(FlightProperty, k)]
-        logger.trace("number of flight keywords used: %d", len(self.keywords))
+class DataCollector():
+    def __init__(self, s: Spacecraft, duration=None, **kwargs) -> None:
         self.spacecraft = s
-        self.data = {k: [] for k in self.keywords}
-        self.data['time'] = []
-        self.collector: Stream = None
-        self.call = None
-        self.start_time = 0.
-        self.last_time = 0.
+        self.start_time = 0
+        self.last_time = 0
+        self.outfile = None
+        self.trigger: Stream = None
+        self.calls = {}
         self.running = False
+        self.keywords = []
+        self.duration = duration
+        self.data = {'time': []}
+        known_modules: 'dict[str, DataModule]' = {
+            'flight': FlightDataModule,
+            'vessel': VesselDataModule,
+        }
+        self.modules: 'dict[str, DataModule]'= {}
+        for name, properties in kwargs.items():
+            if name in known_modules:
+                self.modules[name] = known_modules[name](s, *properties)
+            else:
+                logger.warning("Unknown modules %s ignored", name)
+
+    
+    def __enter__(self):
+        self.start()
+        return self
+    
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+        self.save()
 
 
-    def start(self, duration=None):
-        logger.info("starting data collection")
+    def arm(self, outfile: TextIO):
+        return self.arm_save(outfile)
+    
+
+    def arm_save(self, outfile: TextIO):
+        self.outfile = outfile
+        return self
+    
+    
+    def set_duration(self, duration):
+        self.duration = duration
+    
+    
+    def start(self):
+        logger.info("Starting data collection")
         s = self.spacecraft
-        flight = s.ves.flight()
-        collector = s.conn.add_stream(getattr, s.sc, 'ut')
-        self.start_time = collector()
-        self.last_time = collector()
-        self.running = True
-        self.call = {k: s.conn.add_stream(getattr, flight, k) for k in self.keywords}
+        universal_time = s.conn.add_stream(getattr, s.sc, 'ut')
+        self.trigger = universal_time
+        # set up callbacks
+        self.start_time = universal_time()
+        self.last_time = self.start_time
+        for module in self.modules.values():
+            streams = module.get_streams()
+            for property_name, func in streams.items():
+                logger.info("recording %s", property_name)
+                func()  # warm up call. Without this, kRPC does not give values.
+                self.calls[property_name] = func
+                self.data[property_name] = []
         
-        logger.trace("initializing calls")
-        for k in self.keywords:
-            self.call[k]()
-        
+        # add callback to kRPC
         def log_data(now):
-            if duration and self.start_time + duration < now:
-                logger.trace("flight data collection timeout")
+            if self.duration and self.start_time + self.duration < now:
+                logger.trace("Data collection timeout")
                 self.stop()
+                return
             self.last_time = now
             self.data['time'].append(now)
-            for k in self.keywords:
-                value = self.call[k]()
-                self.data[k].append(value)
-        collector.add_callback(log_data)
-        self.collector = collector
-        
+            for key, func in self.calls.items():
+                value = func()
+                self.data[key].append(value)
+        universal_time.add_callback(log_data)
+        self.running = True
+    
     
     def stop(self):
         if self.running:
             duration = self.last_time - self.start_time
-            logger.info("flight data collection stopped after %s seconds", duration)
-            self.collector.remove()
+            data_rows = len(self.data['time'])
+            logger.info("%i data collected after %s seconds", data_rows, duration)
+            for m in self.modules.values():
+                m.remove_streams()
+            self.trigger.remove()
             self.running = False
     
     
-    def save(self, outfile):
+    def save(self, outfile=None):
         logger.system("Starting data save...")
+        if not outfile:
+            outfile = self.outfile if self.outfile else f'./data/data_{self.last_time}.csv'
         if len(self.data) > 0:
             t0 = time.time()
             df = pd.DataFrame.from_dict(self.data)
-            df.to_csv(outfile, sep=';')
+            df.to_csv(outfile, sep=';', index=False)
             tf = time.time()
-            logger.ok("data saved at %s. This operation took %f seconds.", outfile, tf - t0)
+            logger.ok("Data saved at %s. This operation took %f seconds", outfile, tf - t0)
         else:
-            logger.warning("flight data collection data is empty, skipping save")
+            logger.warning("Data collection data is empty, skipping save")
 
 
-async def collect_flight_data(s: Spacecraft, *args, duration=None, file_output=None):
-    logger.warning("This method of collecting data is deprecated. Use FlightDataCollector class.")
-    logger.trace("initializing flight data collection (FDC)")
-    flight = s.ves.flight()
-    keywords = [k for k in args if isinstance(k, str) and hasattr(FlightProperty, k)]
-    logger.trace("number of FDC keywords: %d", len(keywords))
-    now = s.conn.add_stream(getattr, s.sc, 'ut')
-    call = {k: s.conn.add_stream(getattr, flight, k) for k in keywords}
-    data = {k: [] for k in keywords}
-    data['time'] = []
+class DataModule():
+    def __init__(self, s: Spacecraft):
+        self.spacecraft = s
+        self.streams = []
+        self.keywords = []
+        self.source_name = 'Generic:'
+        self.source = None
     
-    start_time = now()
-    end_time = start_time + duration
-    def send_log_output():
-        if file_output:
-            save_flight_data(file_output, data)
-        return data
+    def get_streams(self):
+        s = self.spacecraft
+        source = self.source
+        self.streams = {
+            self.source_name+k: s.conn.add_stream(getattr, source, k) for k in self.keywords
+        }
+        return self.streams
     
-    try:
-        await _log_flight_data(call, now, data, keywords, end_time)
-    
-    except (asyncio.CancelledError, asyncio.TimeoutError):
-        logger.trace("flight data collection cancelled")
-        return send_log_output()
-    logger.trace("flight data collection finished")
-    return send_log_output()
+    def remove_streams(self):
+        for c in self.streams.values():
+            c.remove()
 
 
-async def _log_flight_data(call, now, data, keywords, end_time):
-    logger.info("starting data collection")
-    duplicate_count = 0
-    last_time = 0
-    while True:
-        t = now()
-        if t > end_time:
-            logger.trace("flight data collection timeout")
-            break
-        if not last_time < t:
-            duplicate_count += 1
-            continue
-        last_time = t
-        
-        try:
-            # use a try-finally block here to ensure that the data is complete
-            pass
-        finally:
-            data['time'].append(t)
-            for k in keywords:
-                data[k].append(call[k]())
-        await asyncio.sleep(0)
-    logger.trace("flight data collection statistics")
-    logger.trace("  duplicate count %d", duplicate_count)
-    logger.trace("  duration %f", end_time - t)
-    if end_time - t > 1:
-        logger.trace("  duplicates per second %f", duplicate_count / end_time - t)
+class FlightDataModule(DataModule):
+    def __init__(self, s: Spacecraft, *args):
+        super().__init__(s)
+        self.source_name = 'Flight:'
+        self.keywords = [k for k in args if hasattr(FlightProperty, k)]
+        self.source = s.ves.flight()
 
-def save_flight_data(file, data):
-    logger.warning("Starting data save, this may take some time...")
-    if len(data) > 0:
-        df = pd.DataFrame.from_dict(data)
-        df.to_csv(file, sep=';')
-        logger.info("data saved at %s", file)
-    else:
-        logger.warning("sensor data is empty, no data is saved")
 
+class VesselDataModule(DataModule):
+    def __init__(self, s: Spacecraft, *args):
+        super().__init__(s)
+        self.source_name = 'Vessel:'
+        self.keywords = [k for k in args if hasattr(VesselProperty, k)]
+        self.source = s.ves

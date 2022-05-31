@@ -10,7 +10,7 @@ https://ksp.rhahi.space/mission/plans/suborbital/newton
 import asyncio
 from enum import IntEnum
 from missionlib.commons import Spacecraft
-from spacelib.time import timer, until
+from spacelib.timing import timer, until
 from spacelib.types import FlightProperty
 from spacelib.telemetry import colorlog
 logging = colorlog.getLogger(__name__, colorlog.ALL)

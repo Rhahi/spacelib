@@ -7,7 +7,7 @@ https://ksp.rhahi.space/mission/plans/suborbital/newton
 
 import asyncio
 from spacelib.telemetry import colorlog
-from spacelib.time import timer
+from spacelib.timing import timer
 from missionlib.commons import Spacecraft
 logging = colorlog.getLogger(__name__, colorlog.ALL)
 
